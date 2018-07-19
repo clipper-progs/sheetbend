@@ -31,11 +31,14 @@ int main( int argc, char** argv )
   clipper::String pdbfile= "NONE";
   clipper::String pdbmask= "NONE";
   clipper::String pdboutfile="sheetbend.pdb";
-  int filter = 2;
-  double rad = 6.0;
+  int ncyc = 1;
   bool refxyz  = false;
   bool refuiso = false;
-  clipper::Resolution reso;
+  double rad    = 0.0;
+  double radscl = 4.0;
+  double res    = 0.0;
+  std::vector<double> rescyc;
+  int filter = 2;
 
   int n_refln = 1000;
   int n_param = 20;
@@ -51,9 +54,11 @@ int main( int argc, char** argv )
     } else if ( args[arg] == "-colin-fo" ) {
       if ( ++arg < args.size() ) ipcolfo = args[arg];
     } else if ( args[arg] == "-resolution" ) {
-      if ( ++arg < args.size() ) reso = clipper::Resolution( clipper::String(args[arg]).f() );
+      if ( ++arg < args.size() ) res    = clipper::String(args[arg]).f();
     } else if ( args[arg] == "-radius" ) {
-      if ( ++arg < args.size() ) rad = clipper::String(args[arg]).f();
+      if ( ++arg < args.size() ) rad    = clipper::String(args[arg]).f();
+    } else if ( args[arg] == "-radius-scale" ) {
+      if ( ++arg < args.size() ) radscl = clipper::String(args[arg]).f();
     } else if ( args[arg] == "-pdbin" ) {
       if ( ++arg < args.size() ) pdbfile = args[arg];
     } else if ( args[arg] == "-pdbout" ) {
@@ -62,6 +67,13 @@ int main( int argc, char** argv )
       refxyz = true;
     } else if ( args[arg] == "-u-iso" ) {
       refuiso = true;
+    } else if ( args[arg] == "-cycles" ) {
+      if ( ++arg < args.size() ) ncyc  = clipper::String(args[arg]).i();
+    } else if ( args[arg] == "-resolution-by-cycle" ) {
+      if ( ++arg < args.size() ) {
+        std::vector<clipper::String> rc = clipper::String(args[arg]).split(",");
+        for ( int i = 0; i < rc.size(); i++ ) rescyc.push_back( clipper::String(rc[i]).f() );
+      }
     } else if ( args[arg] == "-pdbin-mask" ) {
       if ( ++arg < args.size() ) pdbmask = args[arg];
     } else if ( args[arg] == "-filter" ) {
@@ -72,12 +84,10 @@ int main( int argc, char** argv )
     }
   }
   if ( args.size() <= 1 ) {
-    std::cout << "Usage: csheetbend\n\t-mtzin <filename>\n\t-colin-fo <colpath>\n\t-resolution <reso>\n\t-radius <radius>\n\t-pdbin <pdbin>\n\t-pdbout <pdbout>\n\t-coord\n\t-u-iso\n.\n";
+    std::cout << "Usage: csheetbend\n\t-mtzin <filename>\n\t-colin-fo <colpath>\n\t-resolution <reso>\n\t-radius <radius>\n\t-pdbin <pdbin>\n\t-pdbout <pdbout>\n\t-coord\n\t-u-iso\n\t-cycles <cycles>\n\t-resolution-by-cycle <reso,reso,...>\n.\n";
     exit(1);
   }
 
-  // defaults
-  if ( !refxyz && !refuiso ) refxyz = true;
 
   // make data objects
   clipper::CCP4MTZfile mtzin;
@@ -87,10 +97,7 @@ int main( int argc, char** argv )
   mtzin.set_column_label_mode( clipper::CCP4MTZfile::Legacy );
 
   // preliminary data opjects
-  clipper::HKL_info hkls0;
-  clipper::HKL_data<clipper::data32::F_sigF> fo( hkls0 );
-  clipper::HKL_data<clipper::data32::F_phi> fphi0( hkls0 );
-  clipper::HKL_data<clipper::data32::F_phi> dphi0( hkls0 );
+  clipper::HKL_data<clipper::data32::F_sigF> fo0;
 
   // read model
   clipper::MMDBfile mfile;
@@ -103,119 +110,140 @@ int main( int argc, char** argv )
   mtzin.open_read( ipfile );
   clipper::Spacegroup spgr0 = mtzin.spacegroup();
   clipper::Cell       cell = mtzin.cell();
-  if ( reso.is_null() ) reso = mtzin.resolution();
-  //mtzin.import_hkl_info( hkls0 );
-  hkls0.init( spgr0, cell, reso, true );
-  mtzin.import_hkl_data( fo, ipcolfo );
+  clipper::Resolution reso = mtzin.resolution();
+  mtzin.import_hkl_data( fo0, ipcolfo );
   mtzin.close_read();
 
-  // calculate structure factors
-  clipper::HKL_data<clipper::data32::F_phi> fc( hkls0 );
-  clipper::SFcalc_obs_bulk<float> sfcb;
-  sfcb( fc, fo, atoms );
-  std::cerr << "Done sfcalc" << std::endl;
+  // defaults
+  if ( !refxyz && !refuiso ) refxyz = true;
+  if ( res == 0.0 ) res = reso.limit();
+  if ( rescyc.size() == 0 ) rescyc.push_back( res );
 
-  // anisotropy correction
-  //clipper::SFscale_aniso<float>::TYPE F = clipper::SFscale_aniso<float>::F;
-  //clipper::SFscale_aniso<float> sfscl;
-  // sfscl( fo, fc );  // scale Fobs
+  // loop over cycles
+  for ( int cyc = 0; cyc < ncyc; cyc++ ) {
+    // set resolution
+    double fcyc = double(cyc) / std::max(double(ncyc-1),1.0);
+    double fres = fcyc * double(rescyc.size()-1);
+    int ires0 = int( fres );
+    int ires1 = std::min( ires0+1, int(rescyc.size()-1) );
+    double dres = fres - double(ires0);
+    double rcyc = rescyc[ires0] + dres*(rescyc[ires1]-rescyc[ires0]);
 
-  // now do sigmaa calc
-  clipper::HKL_data<clipper::data32::F_phi>   fb( hkls0 ), fd( hkls0 );
-  clipper::HKL_data<clipper::data32::Phi_fom> phiw( hkls0 );
-  clipper::HKL_data<clipper::data32::Flag>    flag( hkls0 );
-  for ( HRI ih = flag.first(); !ih.last(); ih.next() )
-    flag[ih].flag() = clipper::SFweight_spline<float>::BOTH;
+    // set radius if not user specified
+    if ( rad <= 0.0 ) rad = radscl * rcyc;
+    std::cerr << "Cycle: " << cyc+1 << "  Resolution: " << rcyc << "  Radius: " << rad << std::endl;
 
-  // do sigmaa calc
-  clipper::SFweight_spline<float> sfw( n_refln, n_param );
-  sfw( fb, fd, phiw, fo, fc, flag );
-  std::cerr << "Done sigmaa" << std::endl;
+    // truncate resolution
+    clipper::Resolution rescyc( rcyc );
+    clipper::HKL_sampling hklsam( cell, rescyc );
+    clipper::HKL_data<clipper::data32::F_sigF> fo( spgr0, cell, hklsam );
+    for ( HRI ih = fo.first(); !ih.last(); ih.next() ) fo[ih] = fo0[ih.hkl()];
 
-  // expand to P1
-  clipper::Spacegroup spgr = clipper::Spacegroup::p1();
-  clipper::HKL_info hkls( spgr, cell, reso, true );
-  clipper::HKL_data<clipper::data32::F_phi> fphi( hkls );
-  clipper::HKL_data<clipper::data32::F_phi> dphi( hkls );
-  //clipper::HKL_info::HKL_reference_coord ih0( hkls0, clipper::HKL(0,0,0) );
-  for ( HRI ih = hkls.first(); !ih.last(); ih.next() ) {
-    //ih0.set_hkl( ih.hkl() );
-    fphi[ih] = fc[ih.hkl()];
-    dphi[ih] = fd[ih.hkl()];
-  }
-  std::cerr << hkls0.num_reflections() << " " << hkls.num_reflections() << std::endl;
+    // calculate structure factors
+    clipper::HKL_data<clipper::data32::F_phi> fc( fo );
+    clipper::SFcalc_obs_bulk<float> sfcb;
+    sfcb( fc, fo, atoms );
+    std::cerr << "Done sfcalc" << std::endl;
 
-  //for ( HRI ih = fphi.first(); !ih.last(); ih.next() ) std::cout << ih.hkl().format() << fphi[ih].f() << " " << fphi[ih].phi() << std::endl;
-  //for ( HRI ih = dphi.first(); !ih.last(); ih.next() ) std::cout << ih.hkl().format() << dphi[ih].f() << " " << dphi[ih].phi() << std::endl;
+    // anisotropy correction
+    //clipper::SFscale_aniso<float>::TYPE F = clipper::SFscale_aniso<float>::F;
+    //clipper::SFscale_aniso<float> sfscl;
+    // sfscl( fo, fc );  // scale Fobs
 
-  // apply U value
-  //fphi.compute( fphi, clipper::data32::Compute_scale_u_iso_fphi(1.0,-uvalue) );
+    // now do sigmaa calc
+    clipper::HKL_data<clipper::data32::F_phi>   fb( fo ), fd( fo );
+    clipper::HKL_data<clipper::data32::Phi_fom> phiw( fo );
+    clipper::HKL_data<clipper::data32::Flag>    flag( fo );
+    for ( HRI ih = flag.first(); !ih.last(); ih.next() )
+      flag[ih].flag() = clipper::SFweight_spline<float>::BOTH;
 
-  // make grid if necessary
-  clipper::Grid_sampling grid( spgr, cell, reso );
+    // do sigmaa calc
+    clipper::SFweight_spline<float> sfw( n_refln, n_param );
+    sfw( fb, fd, phiw, fo, fc, flag );
+    std::cerr << "Done sigmaa" << std::endl;
 
-  // make xmaps
-  clipper::Xmap<float> cmap( spgr, cell, grid );
-  clipper::Xmap<float> dmap( spgr, cell, grid );
-  clipper::Xmap<float> mmap( spgr, cell, grid );
-  clipper::Xmap<float> x1map( spgr, cell, grid );
-  clipper::Xmap<float> x2map( spgr, cell, grid );
-  clipper::Xmap<float> x3map( spgr, cell, grid );
+    // expand to P1
+    clipper::Spacegroup spgr1 = clipper::Spacegroup::p1();
+    clipper::HKL_data<clipper::data32::F_phi> fphi( spgr1, cell, hklsam );
+    clipper::HKL_data<clipper::data32::F_phi> dphi( fphi );
+    for ( HRI ih = fphi.first(); !ih.last(); ih.next() ) {
+      fphi[ih] = fc[ih.hkl()];
+      dphi[ih] = fd[ih.hkl()];
+    }
+    std::cerr << "Reflections: " << fo0.base_hkl_info().num_reflections() << " " << fo.base_hkl_info().num_reflections() << std::endl;
 
-  cmap.fft_from( fphi );
-  dmap.fft_from( dphi );
-  mmap = 1;
+    //for ( HRI ih = fphi.first(); !ih.last(); ih.next() ) std::cout << ih.hkl().format() << fphi[ih].f() << " " << fphi[ih].phi() << std::endl;
+    //for ( HRI ih = dphi.first(); !ih.last(); ih.next() ) std::cout << ih.hkl().format() << dphi[ih].f() << " " << dphi[ih].phi() << std::endl;
 
-  // read pdb mask file
-  if ( pdbmask != "NONE" ) {
-    mmap = 0;
-    clipper::MMDBfile mmfile;
-    clipper::MiniMol mmolmsk;
-    mmfile.read_file( pdbmask );
-    mmfile.import_minimol( mmolmsk );
-    clipper::EDcalc_mask<float> maskcalc( 2.5 );
-    maskcalc( mmap, mmolmsk.atom_list() );
-    clipper::Map_stats m( mmap );
-    std::cout << "MASK " << m.min() << " " << m.mean() << " " << m.max() << std::endl;
-  }
+    // apply U value
+    //fphi.compute( fphi, clipper::data32::Compute_scale_u_iso_fphi(1.0,-uvalue) );
 
-  // xyz refinement
-  if ( refxyz ) {
-    std::cout << "REFINE XYZ" << std::endl;
+    // make grid if necessary
+    clipper::Grid_sampling grid( spgr1, cell, rescyc );
 
-    // make shift field
-    Shift_field_refine::shift_field_coord( cmap, dmap, mmap, x1map, x2map, x3map, rad, filter );
+    // make xmaps
+    clipper::Xmap<float> cmap( spgr1, cell, grid );
+    clipper::Xmap<float> dmap( spgr1, cell, grid );
+    clipper::Xmap<float> mmap( spgr1, cell, grid );
+    clipper::Xmap<float> x1map( spgr1, cell, grid );
+    clipper::Xmap<float> x2map( spgr1, cell, grid );
+    clipper::Xmap<float> x3map( spgr1, cell, grid );
 
-    // read pdb and update
-    for ( int p = 0; p < mmol.size(); p++ )
-      for ( int m = 0; m < mmol[p].size(); m++ )
-        for ( int a = 0; a < mmol[p][m].size(); a++ ) {
-          const clipper::Coord_frac cf = mmol[p][m][a].coord_orth().coord_frac(cell);
-          const float du = 2.0*x1map.interp<clipper::Interp_cubic>( cf );
-          const float dv = 2.0*x2map.interp<clipper::Interp_cubic>( cf );
-          const float dw = 2.0*x3map.interp<clipper::Interp_cubic>( cf );
-          clipper::Coord_orth dxyz = clipper::Coord_frac(du,dv,dw).coord_orth(cell);
-          mmol[p][m][a].set_coord_orth( mmol[p][m][a].coord_orth() + dxyz );
-        }
-  }
+    cmap.fft_from( fphi );
+    dmap.fft_from( dphi );
+    mmap = 1;
 
-  // u refinement
-  if ( refuiso ) {
-    std::cout << "REFINE U" << std::endl;
+    // read pdb mask file
+    if ( pdbmask != "NONE" ) {
+      mmap = 0;
+      clipper::MMDBfile mmfile;
+      clipper::MiniMol mmolmsk;
+      mmfile.read_file( pdbmask );
+      mmfile.import_minimol( mmolmsk );
+      clipper::EDcalc_mask<float> maskcalc( 2.5 );
+      maskcalc( mmap, mmolmsk.atom_list() );
+      clipper::Map_stats m( mmap );
+      std::cout << "MASK " << m.min() << " " << m.mean() << " " << m.max() << std::endl;
+    }
 
-    // make shift field
-    Shift_field_refine::shift_field_u_iso( cmap, dmap, mmap, x1map, rad, filter );
-    std::cout << clipper::Map_stats( x1map ).min() << " " << clipper::Map_stats( x1map ).max() << std::endl;
+    // xyz refinement
+    if ( refxyz ) {
+      std::cout << "REFINE XYZ" << std::endl;
 
-    // read pdb and update
-    for ( int p = 0; p < mmol.size(); p++ )
-      for ( int m = 0; m < mmol[p].size(); m++ )
-        for ( int a = 0; a < mmol[p][m].size(); a++ ) {
-          const clipper::Coord_frac cf = mmol[p][m][a].coord_orth().coord_frac(cell);
-          const float du = 1.0*x1map.interp<clipper::Interp_cubic>( cf );
-          mmol[p][m][a].set_u_iso( mmol[p][m][a].u_iso() - du );
-        }
-  }
+      // make shift field
+      Shift_field_refine::shift_field_coord( cmap, dmap, mmap, x1map, x2map, x3map, rad, filter );
+
+      // read pdb and update
+      for ( int p = 0; p < mmol.size(); p++ )
+        for ( int m = 0; m < mmol[p].size(); m++ )
+          for ( int a = 0; a < mmol[p][m].size(); a++ ) {
+            const clipper::Coord_frac cf = mmol[p][m][a].coord_orth().coord_frac(cell);
+            const float du = 2.0*x1map.interp<clipper::Interp_cubic>( cf );
+            const float dv = 2.0*x2map.interp<clipper::Interp_cubic>( cf );
+            const float dw = 2.0*x3map.interp<clipper::Interp_cubic>( cf );
+            clipper::Coord_orth dxyz = clipper::Coord_frac(du,dv,dw).coord_orth(cell);
+            mmol[p][m][a].set_coord_orth( mmol[p][m][a].coord_orth() + dxyz );
+          }
+    }
+
+    // u refinement
+    if ( refuiso ) {
+      std::cout << "REFINE U" << std::endl;
+
+      // make shift field
+      Shift_field_refine::shift_field_u_iso( cmap, dmap, mmap, x1map, rad, filter );
+
+      // read pdb and update
+      for ( int p = 0; p < mmol.size(); p++ )
+        for ( int m = 0; m < mmol[p].size(); m++ )
+          for ( int a = 0; a < mmol[p][m].size(); a++ ) {
+            const clipper::Coord_frac cf = mmol[p][m][a].coord_orth().coord_frac(cell);
+            const float du = 1.0*x1map.interp<clipper::Interp_cubic>( cf );
+            mmol[p][m][a].set_u_iso( mmol[p][m][a].u_iso() - du );
+          }
+    }
+
+  } // end of cycle loop
 
   // write file
   mfile.export_minimol( mmol );
