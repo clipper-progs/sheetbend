@@ -34,10 +34,10 @@ int main( int argc, char** argv )
   int ncyc = 1;
   bool refxyz  = false;
   bool refuiso = false;
-  double rad    = 0.0;
-  double radscl = 4.0;
-  double res    = 0.0;
-  std::vector<double> rescyc;
+  double rad    = -1.0;
+  double radscl =  4.0;
+  double res    = -1.0;
+  std::vector<double> resbycyc;
   int filter = 2;
 
   int n_refln = 1000;
@@ -72,7 +72,7 @@ int main( int argc, char** argv )
     } else if ( args[arg] == "-resolution-by-cycle" ) {
       if ( ++arg < args.size() ) {
         std::vector<clipper::String> rc = clipper::String(args[arg]).split(",");
-        for ( int i = 0; i < rc.size(); i++ ) rescyc.push_back( clipper::String(rc[i]).f() );
+        for ( int i = 0; i < rc.size(); i++ ) resbycyc.push_back( clipper::String(rc[i]).f() );
       }
     } else if ( args[arg] == "-pdbin-mask" ) {
       if ( ++arg < args.size() ) pdbmask = args[arg];
@@ -104,7 +104,6 @@ int main( int argc, char** argv )
   clipper::MiniMol mmol;
   mfile.read_file( pdbfile );
   mfile.import_minimol( mmol );
-  clipper::Atom_list atoms = mmol.atom_list();
 
   // open file
   mtzin.open_read( ipfile );
@@ -116,22 +115,23 @@ int main( int argc, char** argv )
 
   // defaults
   if ( !refxyz && !refuiso ) refxyz = true;
-  if ( res == 0.0 ) res = reso.limit();
-  if ( rescyc.size() == 0 ) rescyc.push_back( res );
+  if ( res <= 0.0 ) res = reso.limit();
+  if ( resbycyc.size() == 0 ) resbycyc.push_back( res );
 
   // loop over cycles
   for ( int cyc = 0; cyc < ncyc; cyc++ ) {
     // set resolution
     double fcyc = double(cyc) / std::max(double(ncyc-1),1.0);
-    double fres = fcyc * double(rescyc.size()-1);
+    double fres = fcyc * double(resbycyc.size()-1);
     int ires0 = int( fres );
-    int ires1 = std::min( ires0+1, int(rescyc.size()-1) );
+    int ires1 = std::min( ires0+1, int(resbycyc.size()-1) );
     double dres = fres - double(ires0);
-    double rcyc = rescyc[ires0] + dres*(rescyc[ires1]-rescyc[ires0]);
+    double rcyc = resbycyc[ires0] + dres*(resbycyc[ires1]-resbycyc[ires0]);
 
     // set radius if not user specified
-    if ( rad <= 0.0 ) rad = radscl * rcyc;
-    std::cerr << "Cycle: " << cyc+1 << "  Resolution: " << rcyc << "  Radius: " << rad << std::endl;
+    double radcyc = rad;
+    if ( radcyc <= 0.0 ) radcyc = radscl * rcyc;
+    std::cerr << "Cycle: " << cyc+1 << "  Resolution: " << rcyc << "  Radius: " << radcyc << std::endl;
 
     // truncate resolution
     clipper::Resolution rescyc( rcyc );
@@ -140,6 +140,7 @@ int main( int argc, char** argv )
     for ( HRI ih = fo.first(); !ih.last(); ih.next() ) fo[ih] = fo0[ih.hkl()];
 
     // calculate structure factors
+    clipper::Atom_list atoms = mmol.atom_list();
     clipper::HKL_data<clipper::data32::F_phi> fc( fo );
     clipper::SFcalc_obs_bulk<float> sfcb;
     sfcb( fc, fo, atoms );
@@ -211,7 +212,7 @@ int main( int argc, char** argv )
       std::cout << "REFINE XYZ" << std::endl;
 
       // make shift field
-      Shift_field_refine::shift_field_coord( cmap, dmap, mmap, x1map, x2map, x3map, rad, filter );
+      Shift_field_refine::shift_field_coord( cmap, dmap, mmap, x1map, x2map, x3map, radcyc, filter );
 
       // read pdb and update
       for ( int p = 0; p < mmol.size(); p++ )
@@ -231,7 +232,7 @@ int main( int argc, char** argv )
       std::cout << "REFINE U" << std::endl;
 
       // make shift field
-      Shift_field_refine::shift_field_u_iso( cmap, dmap, mmap, x1map, rad, filter );
+      Shift_field_refine::shift_field_u_iso( cmap, dmap, mmap, x1map, radcyc, filter );
 
       // read pdb and update
       for ( int p = 0; p < mmol.size(); p++ )
