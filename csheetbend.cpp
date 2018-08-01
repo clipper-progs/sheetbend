@@ -10,13 +10,12 @@ extern "C" {
   #include <stdlib.h>
 }
 
-
 #include "shiftfield.h"
 
 
 int main( int argc, char** argv )
 {
-  CCP4Program prog( "csheetbend", "0.1", "$Date: 2018/07/17" );
+  CCP4Program prog( "csheetbend", "0.2", "$Date: 2018/08/01" );
   prog.set_termination_message( "Failed" );
 
   std::cout << std::endl << "Copyright 2018 Kevin Cowtan and University of York." << std::endl << std::endl;
@@ -25,21 +24,24 @@ int main( int argc, char** argv )
   prog.summary_end();
 
   // defaults
+  enum ANISO { NONE, FOBS, FCAL };
   clipper::String title;
   clipper::String ipfile = "NONE";
   clipper::String ipcolfo= "NONE";
+  clipper::String ipcolfree = "NONE";
   clipper::String pdbfile= "NONE";
   clipper::String pdbmask= "NONE";
   clipper::String pdboutfile="sheetbend.pdb";
   int ncyc = 1;
+  int freeflag = 0;
   bool refxyz  = false;
   bool refuiso = false;
   double rad    = -1.0;
   double radscl =  4.0;
   double res    = -1.0;
   std::vector<double> resbycyc;
+  ANISO aniso = NONE;
   int filter = 2;
-
   int n_refln = 1000;
   int n_param = 20;
 
@@ -53,6 +55,8 @@ int main( int argc, char** argv )
       if ( ++arg < args.size() ) ipfile = args[arg];
     } else if ( args[arg] == "-colin-fo" ) {
       if ( ++arg < args.size() ) ipcolfo = args[arg];
+    } else if ( args[arg] == "-colin-free" ) {
+      if ( ++arg < args.size() ) ipcolfree = args[arg];
     } else if ( args[arg] == "-resolution" ) {
       if ( ++arg < args.size() ) res    = clipper::String(args[arg]).f();
     } else if ( args[arg] == "-radius" ) {
@@ -63,6 +67,8 @@ int main( int argc, char** argv )
       if ( ++arg < args.size() ) pdbfile = args[arg];
     } else if ( args[arg] == "-pdbout" ) {
       if ( ++arg < args.size() ) pdboutfile = args[arg];
+    } else if ( args[arg] == "-free-flag" ) {
+      if ( ++arg < args.size() ) freeflag = clipper::String(args[arg]).i();
     } else if ( args[arg] == "-coord" ) {
       refxyz = true;
     } else if ( args[arg] == "-u-iso" ) {
@@ -74,6 +80,10 @@ int main( int argc, char** argv )
         std::vector<clipper::String> rc = clipper::String(args[arg]).split(",");
         for ( int i = 0; i < rc.size(); i++ ) resbycyc.push_back( clipper::String(rc[i]).f() );
       }
+    } else if ( args[arg] == "-aniso-obs" ) {
+      aniso = FOBS;
+    } else if ( args[arg] == "-aniso-cal" ) {
+      aniso = FCAL;
     } else if ( args[arg] == "-pdbin-mask" ) {
       if ( ++arg < args.size() ) pdbmask = args[arg];
     } else if ( args[arg] == "-filter" ) {
@@ -84,7 +94,7 @@ int main( int argc, char** argv )
     }
   }
   if ( args.size() <= 1 ) {
-    std::cout << "Usage: csheetbend\n\t-mtzin <filename>\n\t-colin-fo <colpath>\n\t-resolution <reso>\n\t-radius <radius>\n\t-pdbin <pdbin>\n\t-pdbout <pdbout>\n\t-coord\n\t-u-iso\n\t-cycles <cycles>\n\t-resolution-by-cycle <reso,reso,...>\n.\n";
+    std::cout << "Usage: csheetbend\n\t-mtzin <filename>\n\t-colin-fo <colpath>\n\t-colin-free <colpath>\n\t-resolution <reso>\n\t-radius <radius>\n\t-radius-scale <scale>\n\t-pdbin <pdbin>\n\t-pdbout <pdbout>\n\t-free-flag <flag>\n\t-coord\n\t-u-iso\n\t-cycles <cycles>\n\t-resolution-by-cycle <reso,reso,...>\n\t-aniso-obs\n\t-aniso-cal\n.\n";
     exit(1);
   }
 
@@ -93,11 +103,11 @@ int main( int argc, char** argv )
   clipper::CCP4MTZfile mtzin;
   clipper::MTZcrystal cxtl;
   typedef clipper::HKL_data_base::HKL_reference_index HRI;
-  typedef clipper::Xmap<float>::Map_reference_index MRI;
   mtzin.set_column_label_mode( clipper::CCP4MTZfile::Legacy );
 
   // preliminary data opjects
   clipper::HKL_data<clipper::data32::F_sigF> fo0;
+  clipper::HKL_data<clipper::data32::Flag>   free;
 
   // read model
   clipper::MMDBfile mfile;
@@ -111,12 +121,14 @@ int main( int argc, char** argv )
   clipper::Cell       cell = mtzin.cell();
   clipper::Resolution reso = mtzin.resolution();
   mtzin.import_hkl_data( fo0, ipcolfo );
+  if ( ipcolfree != "NONE" ) mtzin.import_hkl_data( free, ipcolfree );
   mtzin.close_read();
 
   // defaults
   if ( !refxyz && !refuiso ) refxyz = true;
   if ( res <= 0.0 ) res = reso.limit();
   if ( resbycyc.size() == 0 ) resbycyc.push_back( res );
+  if ( free.is_null() ) { free.init( fo0 ); }
 
   // loop over cycles
   for ( int cyc = 0; cyc < ncyc; cyc++ ) {
@@ -131,25 +143,55 @@ int main( int argc, char** argv )
     // set radius if not user specified
     double radcyc = rad;
     if ( radcyc <= 0.0 ) radcyc = radscl * rcyc;
-    std::cerr << "Cycle: " << cyc+1 << "  Resolution: " << rcyc << "  Radius: " << radcyc << std::endl;
+    std::cout << std::endl << "Cycle: " << cyc+1 << "  Resolution: " << rcyc << "  Radius: " << radcyc << std::endl;
 
     // truncate resolution
     clipper::Resolution rescyc( rcyc );
     clipper::HKL_sampling hklsam( cell, rescyc );
-    clipper::HKL_data<clipper::data32::F_sigF> fo( spgr0, cell, hklsam );
-    for ( HRI ih = fo.first(); !ih.last(); ih.next() ) fo[ih] = fo0[ih.hkl()];
+    clipper::HKL_data<clipper::data32::F_sigF> fo_all( spgr0, cell, hklsam ), fo( spgr0, cell, hklsam );
+    for ( HRI ih = fo.first(); !ih.last(); ih.next() ) fo_all[ih] = fo0[ih.hkl()];
+    for ( HRI ih = fo.first(); !ih.last(); ih.next() ) if (free[ih.hkl()].flag() != freeflag) fo[ih] = fo0[ih.hkl()];
 
     // calculate structure factors
     clipper::Atom_list atoms = mmol.atom_list();
     clipper::HKL_data<clipper::data32::F_phi> fc( fo );
     clipper::SFcalc_obs_bulk<float> sfcb;
     sfcb( fc, fo, atoms );
-    std::cerr << "Done sfcalc" << std::endl;
+    //std::cerr << "Done sfcalc" << std::endl;
 
-    // anisotropy correction
-    //clipper::SFscale_aniso<float>::TYPE F = clipper::SFscale_aniso<float>::F;
-    //clipper::SFscale_aniso<float> sfscl;
-    // sfscl( fo, fc );  // scale Fobs
+    // now calc R and R-free
+    std::vector<double> params( n_param, 1.0 );
+    clipper::BasisFn_spline basisfn( fo, n_param, 1.0 );
+    clipper::TargetFn_scaleF1F2<clipper::data32::F_phi,clipper::data32::F_sigF> targetfn( fc, fo );
+    clipper::ResolutionFn rfn( fo.hkl_info(), basisfn, targetfn, params );
+    double r1w, f1w, r1f, f1f, Fo, Fc;
+    r1w = f1w = r1f = f1f = 0.0;
+    for ( HRI ih = fo_all.first(); !ih.last(); ih.next() )
+      if ( !fo_all[ih].missing() ) {
+        Fo = fo_all[ih].f();
+        Fc = sqrt( rfn.f(ih) ) * fc[ih].f();
+        if ( free[ih].flag() == freeflag ) {
+	        r1f += fabs( Fo - Fc );
+	        f1f += Fo;
+        } else {
+	        r1w += fabs( Fo - Fc );
+	        f1w += Fo;
+        }
+      }
+    r1w /= clipper::Util::max( f1w, 0.1 );
+    r1f /= clipper::Util::max( f1f, 0.1 );
+    std::cout << "R-factor      : " << r1w << std::endl
+	            << "Free R-factor : " << r1f << " (at current resolution)" << std::endl;
+
+    // do anisotropic scaling
+    if ( aniso != NONE )  {
+      clipper::SFscale_aniso<float>::TYPE F = clipper::SFscale_aniso<float>::F;
+      clipper::SFscale_aniso<float> sfscl;
+      if ( aniso == FOBS ) sfscl( fo, fc );  // scale Fobs
+      if ( aniso == FCAL ) sfscl( fc, fo );  // scale Fcal
+      std::cout << "\nAnisotropic scaling:\n"
+	        << sfscl.u_aniso_orth(F).format() << std::endl;
+    }
 
     // now do sigmaa calc
     clipper::HKL_data<clipper::data32::F_phi>   fb( fo ), fd( fo );
@@ -161,7 +203,7 @@ int main( int argc, char** argv )
     // do sigmaa calc
     clipper::SFweight_spline<float> sfw( n_refln, n_param );
     sfw( fb, fd, phiw, fo, fc, flag );
-    std::cerr << "Done sigmaa" << std::endl;
+    //std::cerr << "Done sigmaa" << std::endl;
 
     // expand to P1
     clipper::Spacegroup spgr1 = clipper::Spacegroup::p1();
@@ -171,7 +213,7 @@ int main( int argc, char** argv )
       fphi[ih] = fc[ih.hkl()];
       dphi[ih] = fd[ih.hkl()];
     }
-    std::cerr << "Reflections: " << fo0.base_hkl_info().num_reflections() << " " << fo.base_hkl_info().num_reflections() << std::endl;
+    std::cout << "Reflections: " << fo0.base_hkl_info().num_reflections() << " P1: " << fo.base_hkl_info().num_reflections() << std::endl;
 
     //for ( HRI ih = fphi.first(); !ih.last(); ih.next() ) std::cout << ih.hkl().format() << fphi[ih].f() << " " << fphi[ih].phi() << std::endl;
     //for ( HRI ih = dphi.first(); !ih.last(); ih.next() ) std::cout << ih.hkl().format() << dphi[ih].f() << " " << dphi[ih].phi() << std::endl;
