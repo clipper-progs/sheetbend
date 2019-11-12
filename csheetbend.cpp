@@ -34,16 +34,18 @@ int main( int argc, char** argv )
   clipper::String pdboutfile="sheetbend.pdb";
   int ncyc = 1;
   int freeflag = 0;
-  bool refxyz  = false;
-  bool refuiso = false;
+  bool refxyz    = false;
+  bool refuiso   = false;
+  bool refuaniso = false;
+  bool inclconst = false;
   double rad    = -1.0;
-  double radscl =  4.0;
+  double radscl =  5.0;
   double res    = -1.0;
   std::vector<double> resbycyc;
   ANISO aniso = NONE;
   int filter = 2;
   int n_refln = 1000;
-  int n_param = 20;
+  int n_param = 10;
 
   // command input
   CCP4CommandInput args( argc, argv, true );
@@ -73,6 +75,11 @@ int main( int argc, char** argv )
       refxyz = true;
     } else if ( args[arg] == "-u-iso" ) {
       refuiso = true;
+    } else if ( args[arg] == "-u-aniso" ) {
+      refuaniso = true;
+      refuiso = false;
+    } else if ( args[arg] == "-include-const" ) {
+      inclconst = true;
     } else if ( args[arg] == "-cycles" ) {
       if ( ++arg < args.size() ) ncyc  = clipper::String(args[arg]).i();
     } else if ( args[arg] == "-resolution-by-cycle" ) {
@@ -94,7 +101,7 @@ int main( int argc, char** argv )
     }
   }
   if ( args.size() <= 1 ) {
-    std::cout << "Usage: csheetbend\n\t-mtzin <filename>\n\t-colin-fo <colpath>\n\t-colin-free <colpath>\n\t-resolution <reso>\n\t-radius <radius>\n\t-radius-scale <scale>\n\t-pdbin <pdbin>\n\t-pdbout <pdbout>\n\t-free-flag <flag>\n\t-coord\n\t-u-iso\n\t-cycles <cycles>\n\t-resolution-by-cycle <reso,reso,...>\n\t-aniso-obs\n\t-aniso-cal\n.\n";
+    std::cout << "Usage: csheetbend\n\t-mtzin <filename>\n\t-colin-fo <colpath>\n\t-colin-free <colpath>\n\t-resolution <reso>\n\t-radius <radius>\n\t-radius-scale <scale>\n\t-pdbin <pdbin>\n\t-pdbout <pdbout>\n\t-free-flag <flag>\n\t-coord\n\t-u-iso\n\t-u-aniso\n\t-cycles <cycles>\n\t-resolution-by-cycle <reso,reso,...>\n\t-aniso-obs\n\t-aniso-cal\n.\n";
     exit(1);
   }
 
@@ -125,7 +132,7 @@ int main( int argc, char** argv )
   mtzin.close_read();
 
   // defaults
-  if ( !refxyz && !refuiso ) refxyz = true;
+  if ( !refxyz && !refuiso && !refuaniso) refxyz = true;
   if ( res <= 0.0 ) res = reso.limit();
   if ( resbycyc.size() == 0 ) resbycyc.push_back( res );
   if ( free.is_null() ) { free.init( fo0 ); }
@@ -160,16 +167,19 @@ int main( int argc, char** argv )
     //std::cerr << "Done sfcalc" << std::endl;
 
     // now calc R and R-free
-    std::vector<double> params( n_param, 1.0 );
-    clipper::BasisFn_spline basisfn( fo, n_param, 1.0 );
-    clipper::TargetFn_scaleF1F2<clipper::data32::F_phi,clipper::data32::F_sigF> targetfn( fc, fo );
-    clipper::ResolutionFn rfn( fo.hkl_info(), basisfn, targetfn, params );
+    std::vector<double> params( 2, 1.0 );
+    clipper::BasisFn_log_gaussian basisfn; // we're using a Gaussian because using a spline can result in negative square roots {see below}
+    clipper::TargetFn_scaleLogF1F2<clipper::data32::F_phi,clipper::data32::F_sigF> targetfn( fc, fo );
+
+    clipper::ResolutionFn rfn( fo.hkl_info(), basisfn, targetfn, params);
     double r1w, f1w, r1f, f1f, Fo, Fc;
     r1w = f1w = r1f = f1f = 0.0;
     for ( HRI ih = fo_all.first(); !ih.last(); ih.next() )
       if ( !fo_all[ih].missing() ) {
+        float sfac = exp(0.5*basisfn.f(ih.hkl(),cell,rfn.params()));
         Fo = fo_all[ih].f();
-        Fc = sqrt( rfn.f(ih) ) * fc[ih].f();
+        Fc = sfac * fc[ih].f();
+
         if ( free[ih].flag() == freeflag ) {
 	        r1f += fabs( Fo - Fc );
 	        f1f += Fo;
@@ -178,11 +188,13 @@ int main( int argc, char** argv )
 	        f1w += Fo;
         }
       }
+
     r1w /= clipper::Util::max( f1w, 0.1 );
     r1f /= clipper::Util::max( f1f, 0.1 );
-    std::cout << "R-factor      : " << r1w << std::endl
-	            << "Free R-factor : " << r1f << " (at current resolution)" << std::endl;
 
+    std::cout << "R-factor      : " << r1w << std::endl
+	      << "Free R-factor : " << r1f << " (at current resolution)" << std::endl;
+  
     // do anisotropic scaling
     if ( aniso != NONE )  {
       clipper::SFscale_aniso<float>::TYPE F = clipper::SFscale_aniso<float>::F;
@@ -231,6 +243,9 @@ int main( int argc, char** argv )
     clipper::Xmap<float> x1map( spgr1, cell, grid );
     clipper::Xmap<float> x2map( spgr1, cell, grid );
     clipper::Xmap<float> x3map( spgr1, cell, grid );
+    clipper::Xmap<float> x4map( spgr1, cell, grid );
+    clipper::Xmap<float> x5map( spgr1, cell, grid );
+    clipper::Xmap<float> x6map( spgr1, cell, grid );
 
     cmap.fft_from( fphi );
     dmap.fft_from( dphi );
@@ -254,7 +269,8 @@ int main( int argc, char** argv )
       std::cout << "REFINE XYZ" << std::endl;
 
       // make shift field
-      Shift_field_refine::shift_field_coord( cmap, dmap, mmap, x1map, x2map, x3map, radcyc, filter );
+      if ( inclconst ) Shift_field_refine::shift_field_coord_const( cmap, dmap, mmap, x1map, x2map, x3map, radcyc, filter );
+      else             Shift_field_refine::shift_field_coord      ( cmap, dmap, mmap, x1map, x2map, x3map, radcyc, filter );
 
       // read pdb and update
       for ( int p = 0; p < mmol.size(); p++ )
@@ -269,12 +285,12 @@ int main( int argc, char** argv )
           }
     }
 
-    // u refinement
+    // isotropic u refinement
     if ( refuiso ) {
-      std::cout << "REFINE U" << std::endl;
+      std::cout << "REFINE U ISO" << std::endl;
 
       // make shift field
-      Shift_field_refine::shift_field_u_iso( cmap, dmap, mmap, x1map, radcyc, filter );
+      Shift_field_refine::shift_field_u_iso( cmap, dmap, mmap, x1map, radcyc, filter);
 
       // read pdb and update
       for ( int p = 0; p < mmol.size(); p++ )
@@ -286,7 +302,48 @@ int main( int argc, char** argv )
           }
     }
 
+  // anisotropic u refinement
+    if ( refuaniso ) {
+      std::cout << "REFINE U ANISO" << std::endl;
+
+      // make shift field
+      if ( inclconst ) Shift_field_refine::shift_field_u_aniso_const( cmap, dmap, mmap, x1map, x2map, x3map, x4map, x5map, x6map, radcyc, rescyc, filter );
+      else             Shift_field_refine::shift_field_u_aniso      ( cmap, dmap, mmap, x1map, x2map, x3map, x4map, x5map, x6map, radcyc, rescyc, filter );
+
+      // read pdb and update
+      for ( int p = 0; p < mmol.size(); p++ )
+        for ( int m = 0; m < mmol[p].size(); m++ )
+          for ( int a = 0; a < mmol[p][m].size(); a++ ) {
+            const clipper::Coord_frac cf = mmol[p][m][a].coord_orth().coord_frac(cell);
+	    if ( mmol[p][m][a].u_aniso_orth().is_null() == true ) { // if necessary, create new anisotropic entries for the pdb if none exist
+                   const float db1 = mmol[p][m][a].u_iso();
+                   const float db2 = db1;
+                   const float db3 = db1;
+                   clipper::U_aniso_orth db(db1,db2,db3,0,0,0);
+                   mmol[p][m][a].set_u_aniso_orth( db );
+	         }
+               float dx1 = -1.0*x1map.interp<clipper::Interp_cubic>( cf );
+               float dx2 = -1.0*x2map.interp<clipper::Interp_cubic>( cf );
+               float dx3 = -1.0*x3map.interp<clipper::Interp_cubic>( cf );
+               float dx4 = -1.0*x4map.interp<clipper::Interp_cubic>( cf );
+               float dx5 = -1.0*x5map.interp<clipper::Interp_cubic>( cf );
+               float dx6 = -1.0*x6map.interp<clipper::Interp_cubic>( cf );
+               clipper::U_aniso_orth dx(dx1,dx2,dx3,dx4,dx5,dx6);
+               mmol[p][m][a].set_u_aniso_orth( mmol[p][m][a].u_aniso_orth() + dx );
+               mmol[p][m][a].set_u_iso( mmol[p][m][a].u_aniso_orth().u_iso() );
+
+               if (mmol[p][m][a].u_iso() != mmol[p][m][a].u_iso()) { // if this produces a NaN value, reverse the shift (equivalent to not applying it)
+
+	       dx = -dx;
+
+	       mmol[p][m][a].set_u_aniso_orth( mmol[p][m][a].u_aniso_orth() + dx );
+	       mmol[p][m][a].set_u_iso( mmol[p][m][a].u_aniso_orth().u_iso() );}
+
+          }
+    }
+
   } // end of cycle loop
+
 
   // write file
   mfile.export_minimol( mmol );
