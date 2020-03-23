@@ -15,7 +15,7 @@ extern "C" {
 
 int main( int argc, char** argv )
 {
-  CCP4Program prog( "csheetbend", "0.2", "$Date: 2018/08/01" );
+  CCP4Program prog( "csheetbend", "0.3", "$Date: 2020/03/23" );
   prog.set_termination_message( "Failed" );
 
   std::cout << std::endl << "Copyright 2018 Kevin Cowtan and University of York." << std::endl << std::endl;
@@ -181,11 +181,11 @@ int main( int argc, char** argv )
         Fc = sfac * fc[ih].f();
 
         if ( free[ih].flag() == freeflag ) {
-	        r1f += fabs( Fo - Fc );
-	        f1f += Fo;
+                r1f += fabs( Fo - Fc );
+                f1f += Fo;
         } else {
-	        r1w += fabs( Fo - Fc );
-	        f1w += Fo;
+                r1w += fabs( Fo - Fc );
+                f1w += Fo;
         }
       }
 
@@ -193,7 +193,7 @@ int main( int argc, char** argv )
     r1f /= clipper::Util::max( f1f, 0.1 );
 
     std::cout << "R-factor      : " << r1w << std::endl
-	      << "Free R-factor : " << r1f << " (at current resolution)" << std::endl;
+              << "Free R-factor : " << r1f << " (at current resolution)" << std::endl;
   
     // do anisotropic scaling
     if ( aniso != NONE )  {
@@ -202,7 +202,7 @@ int main( int argc, char** argv )
       if ( aniso == FOBS ) sfscl( fo, fc );  // scale Fobs
       if ( aniso == FCAL ) sfscl( fc, fo );  // scale Fcal
       std::cout << "\nAnisotropic scaling:\n"
-	        << sfscl.u_aniso_orth(F).format() << std::endl;
+                << sfscl.u_aniso_orth(F).format() << std::endl;
     }
 
     // now do sigmaa calc
@@ -290,7 +290,8 @@ int main( int argc, char** argv )
       std::cout << "REFINE U ISO" << std::endl;
 
       // make shift field
-      Shift_field_refine::shift_field_u_iso( cmap, dmap, mmap, x1map, radcyc, filter);
+      if ( inclconst ) Shift_field_refine::shift_field_u_iso_const( cmap, dmap, mmap, x1map, radcyc, filter);
+      else             Shift_field_refine::shift_field_u_iso      ( cmap, dmap, mmap, x1map, radcyc, filter);
 
       // read pdb and update
       for ( int p = 0; p < mmol.size(); p++ )
@@ -315,13 +316,13 @@ int main( int argc, char** argv )
         for ( int m = 0; m < mmol[p].size(); m++ )
           for ( int a = 0; a < mmol[p][m].size(); a++ ) {
             const clipper::Coord_frac cf = mmol[p][m][a].coord_orth().coord_frac(cell);
-	    if ( mmol[p][m][a].u_aniso_orth().is_null() == true ) { // if necessary, create new anisotropic entries for the pdb if none exist
+            if ( mmol[p][m][a].u_aniso_orth().is_null() == true ) { // if necessary, create new anisotropic entries for the pdb if none exist
                    const float db1 = mmol[p][m][a].u_iso();
                    const float db2 = db1;
                    const float db3 = db1;
                    clipper::U_aniso_orth db(db1,db2,db3,0,0,0);
                    mmol[p][m][a].set_u_aniso_orth( db );
-	         }
+                 }
                float dx1 = -1.0*x1map.interp<clipper::Interp_cubic>( cf );
                float dx2 = -1.0*x2map.interp<clipper::Interp_cubic>( cf );
                float dx3 = -1.0*x3map.interp<clipper::Interp_cubic>( cf );
@@ -334,10 +335,10 @@ int main( int argc, char** argv )
 
                if (mmol[p][m][a].u_iso() != mmol[p][m][a].u_iso()) { // if this produces a NaN value, reverse the shift (equivalent to not applying it)
 
-	       dx = -dx;
+               dx = -dx;
 
-	       mmol[p][m][a].set_u_aniso_orth( mmol[p][m][a].u_aniso_orth() + dx );
-	       mmol[p][m][a].set_u_iso( mmol[p][m][a].u_aniso_orth().u_iso() );}
+               mmol[p][m][a].set_u_aniso_orth( mmol[p][m][a].u_aniso_orth() + dx );
+               mmol[p][m][a].set_u_iso( mmol[p][m][a].u_aniso_orth().u_iso() );}
 
           }
     }
