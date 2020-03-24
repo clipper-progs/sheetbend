@@ -12,10 +12,13 @@ extern "C" {
 
 #include "shiftfield.h"
 
+struct results_by_cycle{ int cycle; float resolution; float radius; float rwork; float rfree; int nrefl; int nreflp1; };
+
+
 
 int main( int argc, char** argv )
 {
-  CCP4Program prog( "csheetbend", "0.3", "$Date: 2020/03/23" );
+  CCP4Program prog( "csheetbend", "0.3.1", "$Date: 2020/03/24" );
   prog.set_termination_message( "Failed" );
 
   std::cout << std::endl << "Copyright 2018 Kevin Cowtan and University of York." << std::endl << std::endl;
@@ -32,6 +35,7 @@ int main( int argc, char** argv )
   clipper::String pdbfile= "NONE";
   clipper::String pdbmask= "NONE";
   clipper::String pdboutfile="sheetbend.pdb";
+  clipper::String opxml = "NONE";
   int ncyc = 1;
   int freeflag = 0;
   bool refxyz    = false;
@@ -69,6 +73,8 @@ int main( int argc, char** argv )
       if ( ++arg < args.size() ) pdbfile = args[arg];
     } else if ( args[arg] == "-pdbout" ) {
       if ( ++arg < args.size() ) pdboutfile = args[arg];
+    } else if ( args[arg] == "-xmlout" ) {
+      if ( ++arg < args.size() ) opxml  = args[arg];
     } else if ( args[arg] == "-free-flag" ) {
       if ( ++arg < args.size() ) freeflag = clipper::String(args[arg]).i();
     } else if ( args[arg] == "-coord" ) {
@@ -136,6 +142,9 @@ int main( int argc, char** argv )
   if ( res <= 0.0 ) res = reso.limit();
   if ( resbycyc.size() == 0 ) resbycyc.push_back( res );
   if ( free.is_null() ) { free.init( fo0 ); }
+
+  // results
+  std::vector<results_by_cycle> results;
 
   // loop over cycles
   for ( int cyc = 0; cyc < ncyc; cyc++ ) {
@@ -343,12 +352,56 @@ int main( int argc, char** argv )
           }
     }
 
+    // store results for XML
+    results_by_cycle result;
+    result.cycle = cyc;
+    result.resolution = rcyc;
+    result.radius = radcyc;
+    result.rwork = r1w;
+    result.rfree = r1f;
+    result.nrefl = fo0.base_hkl_info().num_reflections();
+    result.nreflp1 = fo.base_hkl_info().num_reflections();
+    results.push_back( result );
   } // end of cycle loop
 
 
-  // write file
+  // write pdb
   mfile.export_minimol( mmol );
   mfile.write_file( pdboutfile );
+
+
+  // write xml
+  if ( opxml != "NONE" ) {
+    FILE *f = fopen( opxml.c_str(), "w" );
+    if ( f == NULL ) clipper::Message::message( clipper::Message_fatal( "Error: Could not open xml temporary file: "+opxml ) );
+    fprintf( f, "<SheetbendResult>\n" );
+    fprintf( f, " <Title>%s</Title>\n", title.c_str() );
+    fprintf( f, " <Cycles>\n" );
+    for ( int c = 0; c < results.size(); c++ ) {
+      fprintf( f, "  <Cycle>\n" );
+      fprintf( f, "   <Number>%i</Number>\n", results[c].cycle+1 );
+      fprintf( f, "   <Resolution>%f</Resolution>\n", results[c].resolution );
+      fprintf( f, "   <Radius>%f</Radius>\n",         results[c].radius );
+      fprintf( f, "   <Rwork>%f</Rwork>\n",           results[c].rwork );
+      fprintf( f, "   <Rfree>%f</Rfree>\n",           results[c].rfree );
+      fprintf( f, "   <NumberOfReflections>%i</NumberOfReflections>\n",     results[c].nrefl   );
+      fprintf( f, "   <NumberOfReflectionsP1>%i</NumberOfReflectionsP1>\n", results[c].nreflp1 );
+      fprintf( f, "  </Cycle>\n" );
+    }
+    fprintf( f, " </Cycles>\n" );
+    fprintf( f, " <Final>\n" );
+    int c = results.size()-1;
+    fprintf( f, "   <Number>%i</Number>\n", results[c].cycle+1 );
+    fprintf( f, "   <Resolution>%f</Resolution>\n", results[c].resolution );
+    fprintf( f, "   <Radius>%f</Radius>\n",         results[c].radius );
+    fprintf( f, "   <Rwork>%f</Rwork>\n",           results[c].rwork );
+    fprintf( f, "   <Rfree>%f</Rfree>\n",           results[c].rfree );
+    fprintf( f, "   <NumberOfReflections>%i</NumberOfReflections>\n",     results[c].nrefl   );
+    fprintf( f, "   <NumberOfReflectionsP1>%i</NumberOfReflectionsP1>\n", results[c].nreflp1 );
+    fprintf( f, " </Final>\n" );
+    fprintf( f, "</SheetbendResult>\n" );
+    fclose(f);
+  }
 
   prog.set_termination_message( "Normal termination" );
 }
