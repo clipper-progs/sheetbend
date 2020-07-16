@@ -18,7 +18,7 @@ struct results_by_cycle{ int cycle; float resolution; float radius; float rwork;
 
 int main( int argc, char** argv )
 {
-  CCP4Program prog( "csheetbend", "0.3.1", "$Date: 2020/03/24" );
+  CCP4Program prog( "csheetbend", "0.3.2", "$Date: 2020/07/15" );
   prog.set_termination_message( "Failed" );
 
   std::cout << std::endl << "Copyright 2018 Kevin Cowtan and University of York." << std::endl << std::endl;
@@ -123,7 +123,9 @@ int main( int argc, char** argv )
   clipper::HKL_data<clipper::data32::Flag>   free;
 
   // read model
+  const int mmdbflags = ::mmdb::MMDBF_IgnoreBlankLines | ::mmdb::MMDBF_IgnoreDuplSeqNum | ::mmdb::MMDBF_IgnoreNonCoorPDBErrors | ::mmdb::MMDBF_IgnoreRemarks;
   clipper::MMDBfile mfile;
+  mfile.SetFlag( mmdbflags );
   clipper::MiniMol mmol;
   mfile.read_file( pdbfile );
   mfile.import_minimol( mmol );
