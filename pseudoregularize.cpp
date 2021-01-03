@@ -35,7 +35,7 @@ bool PseudoRegularize::regularize( clipper::MiniMol& mol1, const clipper::MiniMo
 
   // now loop over groups and regularize in turn
   for ( int i = 0; i < groups.size(); i++ ) {
-    if ( groups[i].size() > 1 ) {
+    if ( groups[i].size() > 0 ) {  // should be redundant?
       clipper::MPolymer mp1, mp2;
       for ( int j = 0; j < groups[i].size(); j++ ) {
         const clipper::MAtomIndex& m = groups[i][j];
@@ -90,7 +90,7 @@ bool PseudoRegularize::regularize( clipper::MPolymer& mp1, const clipper::MPolym
     w2.push_back( w2tmp );
   }
 
-  // now superpose a list of trimonomer fragments
+  // now superpose a list of pentamer fragments
   clipper::MPolymer f0(mp1), f1(mp1), f2(mp1);
   const int dr = 2;
   for ( int r = 0; r < mp2.size(); r++ ) {

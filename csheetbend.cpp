@@ -20,12 +20,12 @@ struct results_by_cycle{ int cyclerr; int cycle; float resolution; float radius;
 
 int main( int argc, char** argv )
 {
-  CCP4Program prog( "csheetbend", "0.4.1", "$Date: 2020/08/28" );
+  CCP4Program prog( "csheetbend", "0.4.2", "$Date: 2020/12/03" );
   prog.set_termination_message( "Failed" );
 
   std::cout << std::endl << "Copyright 2018-2020 Kevin Cowtan and University of York." << std::endl << std::endl;
   prog.summary_beg();
-  std::cout << "$TEXT:Reference: $$ Please reference $$" << std::endl << std::endl << " 'Macromolecular refinement by model morphing using non‐atomic parameterizations.'" << std::endl << "Cowtan, K., & Agirre, J. (2018) Acta Cryst. D74, 125-131." << std::endl << std::endl << "$$" << std::endl;
+  std::cout << "$TEXT:Reference: $$ Please reference $$" << std::endl << std::endl << " 'Shift-field refinement of macromolecular atomic models'" << std::endl << "K. Cowtan, S. Metcalfe and P. Bond (2020) Acta Cryst. D76, 1192-1200." << std::endl << std::endl << "$$" << std::endl;
   prog.summary_end();
 
   // defaults
@@ -52,6 +52,8 @@ int main( int argc, char** argv )
   double rad    = -1.0;
   double radscl =  5.0;
   double res    = -1.0;
+  double u_lo_abs = clipper::Util::b2u(  0.1);
+  double u_hi_abs = clipper::Util::b2u(999.9);
   std::vector<double> resbycyc;
   ANISO aniso = NONE;
   int filter = 2;
@@ -111,6 +113,12 @@ int main( int argc, char** argv )
         std::vector<clipper::String> rc = clipper::String(args[arg]).split(",");
         for ( int i = 0; i < rc.size(); i++ ) resbycyc.push_back( clipper::String(rc[i]).f() );
       }
+    } else if ( args[arg] == "-b-iso-range" ) {
+      if ( ++arg < args.size() ) {
+        std::vector<clipper::String> br = clipper::String(args[arg]).split(",");
+        if ( br.size() > 0 ) u_lo_abs = clipper::Util::b2u(clipper::String(br[0]).f());
+        if ( br.size() > 1 ) u_hi_abs = clipper::Util::b2u(clipper::String(br[1]).f());
+      }
     } else if ( args[arg] == "-aniso-obs" ) {
       aniso = FOBS;
     } else if ( args[arg] == "-aniso-cal" ) {
@@ -125,7 +133,7 @@ int main( int argc, char** argv )
     }
   }
   if ( args.size() <= 1 ) {
-    std::cout << "Usage: csheetbend\n\t-mtzin <filename>\n\t-colin-fo <colpath>\n\t-colin-free <colpath>\n\t-resolution <reso>\n\t-radius <radius>\n\t-radius-scale <scale>\n\t-pdbin <pdbin>\n\t-pdbout <pdbout>\n\t-free-flag <flag>\n\t-coord\n\t-u-iso\n\t-u-aniso\n\t-cycles <cycles>\n\t-resolution-by-cycle <reso,reso,...>\n\t-aniso-obs\n\t-aniso-cal\n.\n";
+    std::cout << "Usage: csheetbend\n\t-mtzin <filename>\n\t-colin-fo <colpath>\n\t-colin-free <colpath>\n\t-resolution <reso>\n\t-radius <radius>\n\t-radius-scale <scale>\n\t-pdbin <pdbin>\n\t-pdbout <pdbout>\n\t-free-flag <flag>\n\t-coord\n\t-u-iso\n\t-u-aniso\n\t-postrefine-coord\n\t-postrefine-u-iso\n\t-postrefine-u-aniso\n\t-cycles <cycles>\n\t-resolution-by-cycle <reso,reso,...>\n\t-aniso-obs\n\t-aniso-cal\n\t-b-iso-range <lo>,<high>\n\t-pseudo-regularize\n\t-refine-regularize-cycles <cycles>\n.\n";
     exit(1);
   }
 
@@ -162,6 +170,7 @@ int main( int argc, char** argv )
   if ( res <= 0.0 ) res = reso.limit();
   if ( resbycyc.size() == 0 ) resbycyc.push_back( res );
   if ( free.is_null() ) { free.init( fo0 ); }
+  if ( refuiso || postrefuiso ) std::cout << std::endl << "B factor bounds " << clipper::Util::u2b(u_lo_abs) << " < B < " << clipper::Util::u2b(u_hi_abs) << std::endl;
 
   // results
   std::vector<results_by_cycle> results;
@@ -338,7 +347,7 @@ int main( int argc, char** argv )
             for ( int a = 0; a < mmol[p][m].size(); a++ ) {
               const clipper::Coord_frac cf = mmol[p][m][a].coord_orth().coord_frac(cell);
               const float du = 1.0*x1map.interp<clipper::Interp_cubic>( cf );
-              mmol[p][m][a].set_u_iso( mmol[p][m][a].u_iso() - du );
+              mmol[p][m][a].set_u_iso( clipper::Util::bound( u_lo_abs, mmol[p][m][a].u_iso() - du, u_hi_abs ) );
             }
       }
 
